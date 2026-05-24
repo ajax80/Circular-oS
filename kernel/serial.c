@@ -50,14 +50,21 @@ static const char sc_map[58] = {
     'z','x','c','v','b','n','m',',','.','/', 0,  '*', 0,  ' '
 };
 
+/* returns char or 0 if no key ready (non-blocking) */
+int serial_trygetc(void) {
+    unsigned char st = inb(0x64);
+    if (!(st & 0x01)) return 0;   /* no data */
+    if (st & 0x20)    return 0;   /* mouse data, not keyboard */
+    unsigned char sc = inb(0x60);
+    if (sc & 0x80) return 0;      /* key release */
+    if (sc < sizeof(sc_map) && sc_map[sc]) return (int)(unsigned char)sc_map[sc];
+    return 0;
+}
+
 char serial_getc(void) {
-    while (1) {
-        if (inb(0x64) & 0x01) {
-            unsigned char sc = inb(0x60);
-            if (!(sc & 0x80) && sc < sizeof(sc_map) && sc_map[sc])
-                return sc_map[sc];
-        }
-    }
+    int c;
+    while (!(c = serial_trygetc()));
+    return (char)c;
 }
 
 void serial_gets(char *buf, int max) {

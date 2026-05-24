@@ -1,6 +1,7 @@
 #include "fb.h"
 
-#define HEADER_ROWS 2
+#define HEADER_ROWS      2
+#define TASKBAR_HEIGHT  16
 #define HDR_BG      0x1A1A2E
 #define HDR_TITLE   0x00FF41
 #define HDR_DIM     0x555577
@@ -108,14 +109,21 @@ static const unsigned char font8x8[96][8] = {
     {0xFF,0x81,0xBD,0xA5,0xBD,0x81,0xFF,0x00}, /* 7F del*/
 };
 
-static unsigned int fb_addr  = 0;
-static unsigned int fb_pitch = 0;
-static unsigned int fb_bpp   = 0;
+static unsigned int fb_addr   = 0;
+static unsigned int fb_pitch  = 0;
+static unsigned int fb_bpp    = 0;
 static int fb_col = 0, fb_row = 0;
 static int fb_cols = 0, fb_rows = 0;
+static int fb_w_px = 0, fb_h_px = 0;
 
 static unsigned int fb_fg = TERM_FG;
 static unsigned int fb_bg = TERM_BG;
+
+/* cursor save-behind */
+#define CUR_W 8
+#define CUR_H 8
+static unsigned int cur_saved[CUR_W * CUR_H];
+static int cur_sx = -1, cur_sy = -1;
 
 void fb_set_fg(unsigned int c) { fb_fg = c; }
 void fb_set_bg(unsigned int c) { fb_bg = c; }
@@ -179,13 +187,35 @@ void fb_update_state(const char *state) {
     fb_str_at(state, fb_cols - 12, 0, HDR_STATE, HDR_BG);
 }
 
+int fb_get_w(void) { return fb_w_px; }
+int fb_get_h(void) { return fb_h_px; }
+
+static void fb_str_px(const char *s, int x, int y,
+                      unsigned int fg, unsigned int bg) {
+    while (*s) {
+        const unsigned char *glyph;
+        int px, py, c = (unsigned char)*s++;
+        if (c < 0x20 || c > 0x7F) c = '?';
+        glyph = font8x8[c - 0x20];
+        for (py = 0; py < 8; py++) {
+            for (px = 0; px < 8; px++) {
+                unsigned int clr = (glyph[py] & (0x80 >> px)) ? fg : bg;
+                fb_put_pixel((unsigned int)(x + px), (unsigned int)(y + py), clr);
+            }
+        }
+        x += 8;
+    }
+}
+
 void fb_init(unsigned int addr, unsigned int pitch,
              unsigned int w, unsigned int h, unsigned int bpp) {
     fb_addr  = addr;
     fb_pitch = pitch;
     fb_bpp   = bpp;
+    fb_w_px  = (int)w;
+    fb_h_px  = (int)h;
     fb_cols  = (int)(w / 8);
-    fb_rows  = (int)(h / 8);
+    fb_rows  = (int)(h / 8) - (TASKBAR_HEIGHT / 8);
     fb_col   = 0;
     fb_row   = HEADER_ROWS;
     fb_fill_rect(0, 0, w, h, TERM_BG);
@@ -205,6 +235,100 @@ static void fb_scroll(void) {
     fb_fill_rect(0, (unsigned int)(fb_rows - 1) * 8,
                  (unsigned int)(fb_cols * 8), 8, fb_bg);
     fb_row = fb_rows - 1;
+}
+
+void fb_draw_taskbar(const char *state, int online, int total, int mx, int my) {
+    if (!fb_addr) return;
+    int ty = fb_h_px - TASKBAR_HEIGHT;
+    fb_fill_rect(0, (unsigned int)ty, (unsigned int)fb_w_px, 1, HDR_TITLE);
+    fb_fill_rect(0, (unsigned int)(ty + 1), (unsigned int)fb_w_px,
+                 TASKBAR_HEIGHT - 1, HDR_BG);
+
+    /* left: OS name */
+    fb_str_px("CIRCULAR OS", 4, ty + 4, HDR_TITLE, HDR_BG);
+
+    /* centre: state + node count */
+    {
+        char buf[24];
+        char *p = buf;
+        const char *s = state;
+        while (*s) *p++ = *s++;
+        *p++ = ' ';
+        *p++ = online / 10 + '0';
+        *p++ = online % 10 + '0';
+        *p++ = '/';
+        *p++ = total / 10 + '0';
+        *p++ = total % 10 + '0';
+        *p++ = ' ';
+        *p++ = 'n';
+        *p++ = 'd';
+        *p   = 0;
+        int cx = (fb_w_px - (int)(p - buf) * 8) / 2;
+        fb_str_px(buf, cx, ty + 4, HDR_STATE, HDR_BG);
+    }
+
+    /* right: cursor position */
+    {
+        char buf[16];
+        char *p = buf;
+        *p++ = 'x';
+        *p++ = ':';
+        if (mx >= 100) *p++ = '0' + mx / 100;
+        *p++ = '0' + (mx % 100) / 10;
+        *p++ = '0' + mx % 10;
+        *p++ = ' ';
+        *p++ = 'y';
+        *p++ = ':';
+        if (my >= 100) *p++ = '0' + my / 100;
+        *p++ = '0' + (my % 100) / 10;
+        *p++ = '0' + my % 10;
+        *p   = 0;
+        int rx = fb_w_px - (int)(p - buf) * 8 - 4;
+        fb_str_px(buf, rx, ty + 4, 0x888888, HDR_BG);
+    }
+}
+
+void fb_erase_cursor(void) {
+    if (cur_sx < 0) return;
+    int x, y;
+    for (y = 0; y < CUR_H; y++)
+        for (x = 0; x < CUR_W; x++) {
+            unsigned int px = (unsigned int)(cur_sx + x);
+            unsigned int py = (unsigned int)(cur_sy + y);
+            if (px < (unsigned int)fb_w_px && py < (unsigned int)fb_h_px)
+                fb_put_pixel(px, py, cur_saved[y * CUR_W + x]);
+        }
+    cur_sx = cur_sy = -1;
+}
+
+void fb_draw_cursor(int x, int y) {
+    static const unsigned char shape[CUR_H] = {
+        0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xE0, 0xA0, 0x10
+    };
+    int px, py;
+    /* save behind */
+    cur_sx = x; cur_sy = y;
+    for (py = 0; py < CUR_H; py++)
+        for (px = 0; px < CUR_W; px++) {
+            unsigned int ppx = (unsigned int)(x + px);
+            unsigned int ppy = (unsigned int)(y + py);
+            if (ppx < (unsigned int)fb_w_px && ppy < (unsigned int)fb_h_px) {
+                unsigned char *ptr = (unsigned char *)(fb_addr + ppy * fb_pitch + ppx * (fb_bpp >> 3));
+                cur_saved[py * CUR_W + px] = (unsigned int)ptr[0]
+                    | ((unsigned int)ptr[1] << 8)
+                    | ((unsigned int)ptr[2] << 16);
+            }
+        }
+    /* draw */
+    for (py = 0; py < CUR_H; py++)
+        for (px = 0; px < CUR_W; px++) {
+            unsigned int ppx = (unsigned int)(x + px);
+            unsigned int ppy = (unsigned int)(y + py);
+            if (ppx < (unsigned int)fb_w_px && ppy < (unsigned int)fb_h_px) {
+                if (shape[py] & (0x80 >> px))
+                    fb_put_pixel(ppx, ppy, 0xFFFFFF);
+            }
+        }
 }
 
 void fb_putc(char c) {

@@ -3,11 +3,18 @@
 #include "vga.h"
 #include "fb.h"
 #include "shell.h"
+#include "mm.h"
+#include "pci.h"
+
+/* heap: 2MB just past 1MB mark */
+#define HEAP_START 0x00200000u
+#define HEAP_SIZE  0x00200000u   /* 2MB */
 
 void kernel_main(unsigned int magic, unsigned int mb_info_addr) {
     vga_init();
     serial_init();
     serial_puts("Circular OS\n===========\n");
+    mm_init(HEAP_START, HEAP_START + HEAP_SIZE);
 
     if (magic != 0x36d76289) {
         serial_puts("bad multiboot magic\n");
@@ -50,6 +57,7 @@ void kernel_main(unsigned int magic, unsigned int mb_info_addr) {
         }
     }
 
+    pci_init();
     schema_boot();
     fb_update_state("SETTLED");
     shell_run();

@@ -2,6 +2,9 @@
 #include "schema.h"
 #include "serial.h"
 #include "fb.h"
+#include "mm.h"
+#include "pci.h"
+#include "mouse.h"
 
 #define COL_OUTPUT  0x00CC33
 #define COL_PROMPT  0x00FF88
@@ -9,7 +12,7 @@
 #define COL_ERR     0xFF4444
 #define COL_76      0xFF6600
 
-#define MAX_PROCS   16
+#define MAX_PROCS   49
 #define BUF_LEN     64
 
 typedef struct {
@@ -162,6 +165,224 @@ static void cmd_reset(void) {
     serial_puts("process table cleared\n");
 }
 
+static unsigned int state_color(uint8_t s) {
+    switch (s) {
+        case STATE_FUNDAMENTAL: return 0xCC00FF;  /* purple  — OK, go        */
+        case STATE_FULL_TRUST:  return 0x9900CC;  /* deep purple — cleared   */
+        case STATE_PERFECT:     return 0xFF00FF;  /* magenta — 88            */
+        case STATE_SETTLED:     return 0xFF2244;  /* red     — stable, idle  */
+        case STATE_NEW_PROCESS: return 0x00FF88;  /* green   — young, in arc */
+        case STATE_RECOVERY:    return 0x0088FF;  /* blue    — needs attn    */
+        case STATE_FRICTION:    return 0xFFDD00;  /* yellow  — about to fail */
+        case STATE_EXCISED:     return 0xFFFFFF;  /* white   — down, broke   */
+        default:                return 0x222222;
+    }
+}
+
+static char state_glyph(uint8_t s) {
+    switch (s) {
+        case STATE_FUNDAMENTAL: return 'F';
+        case STATE_FULL_TRUST:  return 'T';
+        case STATE_PERFECT:     return '8';
+        case STATE_SETTLED:     return 'S';
+        case STATE_NEW_PROCESS: return 'N';
+        case STATE_RECOVERY:    return 'R';
+        case STATE_FRICTION:    return '~';
+        case STATE_EXCISED:     return 'X';
+        default:                return '?';
+    }
+}
+
+static void cmd_status(void) {
+    int i, fund=0, recov=0, ex=0;
+    for (i = 0; i < MAX_PROCS; i++) {
+        if (!procs[i].active) continue;
+        switch (procs[i].inst.state) {
+            case STATE_FUNDAMENTAL: fund++;  break;
+            case STATE_FULL_TRUST:
+            case STATE_PERFECT:     break;
+            case STATE_RECOVERY:
+            case STATE_FRICTION:    recov++; break;
+            case STATE_EXCISED:     ex++;    break;
+        }
+    }
+
+    fb_set_fg(0x00FF41);  serial_putu((uint32_t)fund);
+    fb_set_fg(0xAAAAAA);  serial_puts(" fund  ");
+    fb_set_fg(0xFF8800);  serial_putu((uint32_t)recov);
+    fb_set_fg(0xAAAAAA);  serial_puts(" recov  ");
+    fb_set_fg(0x666666);  serial_putu((uint32_t)ex);
+    fb_set_fg(0xAAAAAA);  serial_puts(" excised\n\n");
+
+    for (i = 0; i < MAX_PROCS; i++) {
+        if (i > 0 && i % 7 == 0) serial_putc('\n');
+        if (procs[i].active) {
+            fb_set_fg(state_color(procs[i].inst.state));
+            serial_puts(" [");
+            if (i + 1 < 10) serial_putc(' ');
+            serial_putu((uint32_t)(i + 1));
+            serial_putc(':');
+            serial_putc(state_glyph(procs[i].inst.state));
+            serial_putc(']');
+        } else {
+            fb_set_fg(0x2A2A2A);
+            serial_puts(" [ -- ]");
+        }
+    }
+    fb_set_fg(COL_OUTPUT);
+    serial_puts("\n");
+}
+
+static void run_arc(schema_instance_t *inst, uint32_t flags) {
+    int iters = 0;
+    while (iters++ < 8) {
+        uint8_t cur = inst->state;
+        if (cur == STATE_NEW_PROCESS || cur == STATE_FULL_TRUST ||
+            cur == STATE_RECOVERY    || cur == STATE_FRICTION)
+            schema_eval(inst, flags);
+        else break;
+    }
+}
+
+static void cmd_bootleg(void) {
+    static const uint32_t node_flags[49] = {
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0xFE,0xFC,0xF8,0xF0,0xE0,0xC0,0x80,
+        0x7F,0x3F,0x1F,0x0F,0x07,0x03,0x00
+    };
+    int i, j, spawned = 0;
+
+    for (i = 0; i < MAX_PROCS; i++) procs[i].active = 0;
+    next_pid = 1;
+
+    fb_set_fg(0x00FF41); serial_puts("booting federation");
+    fb_set_fg(COL_OUTPUT);
+
+    for (i = 0; i < 49; i++) {
+        int slot = -1;
+        for (j = 0; j < MAX_PROCS; j++) {
+            if (!procs[j].active) { slot = j; break; }
+        }
+        if (slot < 0) break;
+        schema_init(&procs[slot].inst, next_pid++, STATE_PERFECT);
+        procs[slot].active = 1;
+        run_arc(&procs[slot].inst, node_flags[i]);
+        if (procs[slot].inst.state == STATE_EXCISED)
+            procs[slot].active = 0;
+        else
+            spawned++;
+        serial_putc('.');
+    }
+
+    serial_putc('\n');
+    fb_set_fg(0x00FF41);  serial_putu((uint32_t)spawned);
+    fb_set_fg(COL_OUTPUT); serial_puts("/49 nodes online\n");
+    fb_update_state("FEDERATED");
+}
+
+static void cmd_clear(void) {
+    int i;
+    for (i = 0; i < 40; i++) serial_putc('\n');
+}
+
+static void cmd_echo(const char *s) {
+    serial_puts(s);
+    serial_putc('\n');
+}
+
+static void cmd_mem(void) {
+    uint32_t used  = mm_used();
+    uint32_t total = mm_total();
+    serial_puts("  heap used:  "); serial_putu(used);  serial_puts(" bytes\n");
+    serial_puts("  heap total: "); serial_putu(total); serial_puts(" bytes\n");
+    serial_puts("  heap free:  "); serial_putu(total - used); serial_puts(" bytes\n");
+}
+
+static const char *pci_cls_name(uint8_t c) {
+    switch (c) {
+        case 0x00: return "legacy";
+        case 0x01: return "storage";
+        case 0x02: return "network";
+        case 0x03: return "display";
+        case 0x04: return "multimedia";
+        case 0x06: return "bridge";
+        case 0x0C: return "serial bus";
+        default:   return "device";
+    }
+}
+
+static void cmd_lspci(void) {
+    int i;
+    if (!pci_count) { serial_puts("  no PCI devices found\n"); return; }
+    for (i = 0; i < pci_count; i++) {
+        pci_dev_t *d = &pci_devs[i];
+        serial_puts("  ");
+        serial_putu(d->bus); serial_putc(':');
+        serial_putu(d->dev); serial_putc('.');
+        serial_putu(d->func);
+        serial_puts("  ");
+        serial_puth(d->vendor); serial_putc(':');
+        serial_puth(d->device);
+        serial_puts("  ");
+        serial_puts(pci_cls_name(d->class));
+        serial_putc('\n');
+    }
+}
+
+static void cmd_arch(void) {
+    uint32_t eax, ebx, ecx, edx;
+    char brand[48];
+    int i;
+
+    __asm__ volatile("cpuid"
+        : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+        : "a"(0));
+
+    /* vendor string is in EBX:EDX:ECX */
+    *(uint32_t *)(brand)      = ebx;
+    *(uint32_t *)(brand + 4)  = edx;
+    *(uint32_t *)(brand + 8)  = ecx;
+    brand[12] = 0;
+    serial_puts("  vendor: "); serial_puts(brand); serial_putc('\n');
+
+    __asm__ volatile("cpuid"
+        : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+        : "a"(1));
+    serial_puts("  family: "); serial_putu((eax >> 8) & 0xF);
+    serial_puts("  model: ");  serial_putu((eax >> 4) & 0xF);
+    serial_puts("  step: ");   serial_putu(eax & 0xF);
+    serial_putc('\n');
+    serial_puts("  features:");
+    if (edx & (1 << 25)) serial_puts(" SSE");
+    if (edx & (1 << 26)) serial_puts(" SSE2");
+    if (ecx & (1 <<  0)) serial_puts(" SSE3");
+    if (ecx & (1 << 28)) serial_puts(" AVX");
+    if (edx & (1 <<  5)) serial_puts(" MSR");
+    if (edx & (1 << 23)) serial_puts(" MMX");
+    serial_putc('\n');
+
+    /* brand string (EAX 0x80000002-4) */
+    uint32_t mx;
+    __asm__ volatile("cpuid" : "=a"(mx) : "a"(0x80000000u) : "ebx","ecx","edx");
+    if (mx >= 0x80000004u) {
+        uint32_t *p = (uint32_t *)brand;
+        uint32_t leaf;
+        for (leaf = 0x80000002u; leaf <= 0x80000004u; leaf++) {
+            __asm__ volatile("cpuid"
+                : "=a"(p[0]),"=b"(p[1]),"=c"(p[2]),"=d"(p[3])
+                : "a"(leaf));
+            p += 4;
+        }
+        brand[47] = 0;
+        for (i = 0; brand[i] == ' '; i++);
+        serial_puts("  cpu: "); serial_puts(brand + i); serial_putc('\n');
+    }
+}
+
 static void cmd_help(void) {
     serial_puts("commands:\n");
     serial_puts("  spawn <hex>       spawn process with condition flags\n");
@@ -169,6 +390,13 @@ static void cmd_help(void) {
     serial_puts("  ps                list active processes\n");
     serial_puts("  kill <pid>        excise a process (76)\n");
     serial_puts("  reset             clear all processes\n");
+    serial_puts("  bootleg           boot all 49 federation nodes\n");
+    serial_puts("  status            live federation map\n");
+    serial_puts("  clear             clear terminal\n");
+    serial_puts("  echo <text>       print text\n");
+    serial_puts("  mem               heap memory stats\n");
+    serial_puts("  lspci             list PCI devices\n");
+    serial_puts("  arch              CPU info\n");
     serial_puts("  help              this\n");
     serial_puts("\nflag reference (state 8 / I vector):\n");
     serial_puts("  0x01 hw_exists  0x02 hw_responds  0x04 dep_present  0x08 dep_state\n");
@@ -193,24 +421,100 @@ static void dispatch(char *line) {
         cmd_kill(parse_uint(p + 4));
     } else if (p[0]=='r' && p[1]=='e' && p[2]=='s' && p[3]=='e' && p[4]=='t') {
         cmd_reset();
+    } else if (p[0]=='s' && p[1]=='t') {
+        cmd_status();
+    } else if (p[0]=='b' && p[1]=='o') {
+        cmd_bootleg();
+    } else if (p[0]=='c' && p[1]=='l') {
+        cmd_clear();
+    } else if (p[0]=='e' && p[1]=='c') {
+        cmd_echo(skip_spaces(p + 4));
+    } else if (p[0]=='m' && p[1]=='e') {
+        cmd_mem();
+    } else if (p[0]=='l' && p[1]=='s') {
+        cmd_lspci();
+    } else if (p[0]=='a' && p[1]=='r') {
+        cmd_arch();
     } else if (p[0]=='h') {
         cmd_help();
     } else {
-        serial_puts("unknown command — type help\n");
+        serial_puts("unknown command\n");
     }
+}
+
+static int  fed_online = 0;
+static int  fed_total  = 49;
+
+static int count_online(void) {
+    int i, n = 0;
+    for (i = 0; i < MAX_PROCS; i++)
+        if (procs[i].active) n++;
+    return n;
 }
 
 void shell_run(void) {
     char buf[BUF_LEN];
+    int  pos = 0;
+    int  cur_x, cur_y, last_x = -1, last_y = -1;
+    int  first = 1;
+
+    /* init mouse to screen centre */
+    if (fb_active()) {
+        int w = fb_get_w(), h = fb_get_h();
+        if (w && h) mouse_set_bounds(w, h);
+    }
+    mouse_init();
+
     fb_set_fg(0xFFFFFF);
     serial_puts("\nCircular OS shell\n");
     fb_set_fg(COL_OUTPUT);
     serial_puts("type 'help' for commands\n\n");
+
+    fb_set_fg(COL_PROMPT);
+    serial_puts("circular> ");
+    fb_set_fg(COL_OUTPUT);
+
     while (1) {
-        fb_set_fg(COL_PROMPT);
-        serial_puts("circular> ");
-        fb_set_fg(COL_OUTPUT);
-        serial_gets(buf, BUF_LEN);
-        dispatch(buf);
+        /* mouse */
+        mouse_poll();
+        cur_x = mouse_x;
+        cur_y = mouse_y;
+        if (fb_active() && (cur_x != last_x || cur_y != last_y)) {
+            fb_erase_cursor();
+            fb_draw_cursor(cur_x, cur_y);
+            last_x = cur_x;
+            last_y = cur_y;
+        }
+
+        /* taskbar refresh on first run or after commands */
+        if (first && fb_active()) {
+            fed_online = count_online();
+            fb_draw_taskbar("SETTLED", fed_online, fed_total, cur_x, cur_y);
+            first = 0;
+        }
+
+        /* keyboard (non-blocking) */
+        int c = serial_trygetc();
+        if (!c) continue;
+
+        if (c == '\n' || c == '\r') {
+            buf[pos] = 0;
+            serial_putc('\n');
+            dispatch(buf);
+            pos = 0;
+            /* refresh taskbar after every command */
+            if (fb_active()) {
+                fed_online = count_online();
+                fb_draw_taskbar("SETTLED", fed_online, fed_total, cur_x, cur_y);
+            }
+            fb_set_fg(COL_PROMPT);
+            serial_puts("circular> ");
+            fb_set_fg(COL_OUTPUT);
+        } else if (c == '\b') {
+            if (pos > 0) { pos--; serial_puts("\b \b"); }
+        } else if (pos < BUF_LEN - 1) {
+            buf[pos++] = (char)c;
+            serial_putc((char)c);
+        }
     }
 }
