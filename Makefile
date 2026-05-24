@@ -19,6 +19,11 @@ OBJS = boot/boot.o \
        kernel/mm.o \
        kernel/pci.o \
        kernel/mouse.o \
+       kernel/idt.o \
+       kernel/pic.o \
+       kernel/isr.o \
+       kernel/timer.o \
+       kernel/audio.o \
        kernel/shell.o \
        kernel/kernel.o
 
@@ -28,6 +33,9 @@ circular.elf: $(OBJS)
 	$(LD) $(LDFLAGS) -o $@ $^
 
 boot/boot.o: boot/boot.asm
+	$(AS) $(ASFLAGS) -o $@ $<
+
+kernel/isr.o: kernel/isr.asm
 	$(AS) $(ASFLAGS) -o $@ $<
 
 %.o: %.c

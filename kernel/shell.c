@@ -5,6 +5,8 @@
 #include "mm.h"
 #include "pci.h"
 #include "mouse.h"
+#include "audio.h"
+#include "timer.h"
 
 #define COL_OUTPUT  0x00CC33
 #define COL_PROMPT  0x00FF88
@@ -383,6 +385,81 @@ static void cmd_arch(void) {
     }
 }
 
+static int schema_corrupt_level(void) {
+    int i, friction = 0, recov = 0, excised = 0, total = 0;
+    for (i = 0; i < MAX_PROCS; i++) {
+        if (!procs[i].active) continue;
+        total++;
+        switch (procs[i].inst.state) {
+            case STATE_FRICTION:    friction++; break;
+            case STATE_RECOVERY:    recov++;    break;
+            case STATE_EXCISED:     excised++;  break;
+            default: break;
+        }
+    }
+    if (!total) return 0;
+    if (excised > total / 4) return 3;   /* >25% excised  — dropout     */
+    if (recov   > total / 4) return 2;   /* >25% recovery — wrong notes */
+    if (friction > 0)        return 1;   /* any friction  — timing drift */
+    return 0;
+}
+
+static void cmd_groove(void) {
+    int level = schema_corrupt_level();
+    audio_set_corruption(level);
+    audio_start_groove();
+    serial_puts("groove: corruption level ");
+    serial_putu((uint32_t)level);
+    serial_putc('\n');
+    switch (level) {
+        case 0: serial_puts("  clean — all nodes nominal\n");     break;
+        case 1: serial_puts("  drift — friction detected\n");     break;
+        case 2: serial_puts("  wrong notes — recovery nodes\n");  break;
+        case 3: serial_puts("  dropout — cascade failure\n");     break;
+    }
+}
+
+static void cmd_stopgroove(void) {
+    audio_stop_groove();
+    serial_puts("groove stopped\n");
+}
+
+static void cmd_tone(const char *p) {
+    uint32_t freq = parse_uint(p);
+    while (*p && *p != ' ') p++;
+    uint32_t ms   = parse_uint(p);
+    if (!freq) freq = 440;
+    if (!ms)   ms   = 500;
+    audio_tone(freq, ms);
+    serial_puts("tone ");
+    serial_putu(freq);
+    serial_puts("Hz ");
+    serial_putu(ms);
+    serial_puts("ms queued\n");
+}
+
+static void cmd_beep(void) {
+    audio_tone(880, 100);
+    audio_silence(50);
+    audio_tone(1046, 150);
+}
+
+static void cmd_schema_audio(uint32_t pid) {
+    int i;
+    for (i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].active && procs[i].inst.pid == pid) {
+            audio_play_schema(procs[i].inst.state);
+            serial_puts("playing signature for pid ");
+            serial_putu(pid);
+            serial_puts(" state=");
+            serial_puts(state_name(procs[i].inst.state));
+            serial_putc('\n');
+            return;
+        }
+    }
+    serial_puts("pid not found\n");
+}
+
 static void cmd_help(void) {
     serial_puts("commands:\n");
     serial_puts("  spawn <hex>       spawn process with condition flags\n");
@@ -397,6 +474,11 @@ static void cmd_help(void) {
     serial_puts("  mem               heap memory stats\n");
     serial_puts("  lspci             list PCI devices\n");
     serial_puts("  arch              CPU info\n");
+    serial_puts("  groove            start schema-driven audio loop\n");
+    serial_puts("  stop              stop groove\n");
+    serial_puts("  tone <hz> <ms>    play a tone\n");
+    serial_puts("  beep              test beep\n");
+    serial_puts("  sig <pid>         play schema signature for process\n");
     serial_puts("  help              this\n");
     serial_puts("\nflag reference (state 8 / I vector):\n");
     serial_puts("  0x01 hw_exists  0x02 hw_responds  0x04 dep_present  0x08 dep_state\n");
@@ -435,6 +517,16 @@ static void dispatch(char *line) {
         cmd_lspci();
     } else if (p[0]=='a' && p[1]=='r') {
         cmd_arch();
+    } else if (p[0]=='g' && p[1]=='r') {
+        cmd_groove();
+    } else if (p[0]=='s' && p[1]=='t' && p[2]=='o') {
+        cmd_stopgroove();
+    } else if (p[0]=='t' && p[1]=='o') {
+        cmd_tone(skip_spaces(p + 4));
+    } else if (p[0]=='b' && p[1]=='e') {
+        cmd_beep();
+    } else if (p[0]=='s' && p[1]=='i') {
+        cmd_schema_audio(parse_uint(p + 3));
     } else if (p[0]=='h') {
         cmd_help();
     } else {
