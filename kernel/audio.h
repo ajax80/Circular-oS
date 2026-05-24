@@ -6,7 +6,7 @@ typedef unsigned short uint16_t;
 typedef unsigned int   uint32_t;
 
 void audio_init(void);
-void audio_tick(uint32_t ticks);
+void audio_tick(void);   /* call from main loop — drives note queue */
 
 /* direct play — blocks via timer_wait_ms */
 void audio_tone(uint32_t freq, uint32_t ms);

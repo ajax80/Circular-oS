@@ -412,10 +412,10 @@ static void cmd_groove(void) {
     serial_putu((uint32_t)level);
     serial_putc('\n');
     switch (level) {
-        case 0: serial_puts("  clean — all nodes nominal\n");     break;
-        case 1: serial_puts("  drift — friction detected\n");     break;
-        case 2: serial_puts("  wrong notes — recovery nodes\n");  break;
-        case 3: serial_puts("  dropout — cascade failure\n");     break;
+        case 0: serial_puts("  -> clean: all nodes nominal\n");    break;
+        case 1: serial_puts("  -> drift: friction detected\n");    break;
+        case 2: serial_puts("  -> wrong notes: recovery nodes\n"); break;
+        case 3: serial_puts("  -> dropout: cascade failure\n");    break;
     }
 }
 
@@ -567,7 +567,8 @@ void shell_run(void) {
     fb_set_fg(COL_OUTPUT);
 
     while (1) {
-        /* mouse */
+        /* audio + mouse */
+        audio_tick();
         mouse_poll();
         cur_x = mouse_x;
         cur_y = mouse_y;

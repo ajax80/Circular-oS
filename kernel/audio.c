@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "timer.h"
 
 /* ── I/O ─────────────────────────────────────────────────────── */
 static void outb(unsigned short p, unsigned char v) {
@@ -156,13 +157,13 @@ void audio_silence(uint32_t ms) {
     q_push(0, ms);
 }
 
-/* ── Tick handler — called from IRQ0 at 1000Hz ───────────────── */
-void audio_tick(uint32_t ticks) {
-    if (q_head == q_tail) {
-        if (!playing) {
-            if (groove_active) groove_queue_next();
-            else return;
-        }
+/* ── Tick handler — call from main loop as fast as possible ─── */
+void audio_tick(void) {
+    uint32_t ticks = timer_poll();
+
+    if (q_head == q_tail && !playing) {
+        if (groove_active) groove_queue_next();
+        else return;
     }
 
     if (!playing) {

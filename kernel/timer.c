@@ -1,30 +1,37 @@
 #include "timer.h"
-#include "audio.h"
 
-static volatile unsigned int ticks = 0;
+static unsigned int pit_ticks  = 0;
+static unsigned short pit_last = 0xFFFF;
 
 static void outb(unsigned short p, unsigned char v) {
     __asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p));
 }
+static unsigned char inb(unsigned short p) {
+    unsigned char v;
+    __asm__ volatile("inb %1,%0":"=a"(v):"Nd"(p));
+    return v;
+}
 
 void timer_init(void) {
-    /* PIT channel 0, mode 3 (square wave), 1000 Hz */
+    /* PIT channel 0, mode 3, 1000 Hz */
     unsigned short div = 1193;
     outb(0x43, 0x36);
     outb(0x40, (unsigned char)(div & 0xFF));
     outb(0x40, (unsigned char)(div >> 8));
+    pit_last = 0xFFFF;
+    pit_ticks = 0;
 }
 
-uint32_t timer_ticks(void) { return ticks; }
-
-void timer_wait_ms(uint32_t ms) {
-    uint32_t end = ticks + ms;
-    while (ticks < end) __asm__ volatile("hlt");
+uint32_t timer_poll(void) {
+    /* latch channel 0 and read current count */
+    outb(0x43, 0x00);
+    unsigned char lo = inb(0x40);
+    unsigned char hi = inb(0x40);
+    unsigned short now = (unsigned short)((unsigned short)hi << 8 | lo);
+    /* counter counts down; if now > last it wrapped = 1ms elapsed */
+    if (now > pit_last) pit_ticks++;
+    pit_last = now;
+    return pit_ticks;
 }
 
-void irq0_handler(void) {
-    ticks++;
-    audio_tick(ticks);
-    /* EOI to master PIC */
-    __asm__ volatile("outb %0,%1"::"a"((unsigned char)0x20),"Nd"((unsigned short)0x20));
-}
+uint32_t timer_ticks(void) { return pit_ticks; }

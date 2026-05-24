@@ -19,9 +19,6 @@ OBJS = boot/boot.o \
        kernel/mm.o \
        kernel/pci.o \
        kernel/mouse.o \
-       kernel/idt.o \
-       kernel/pic.o \
-       kernel/isr.o \
        kernel/timer.o \
        kernel/audio.o \
        kernel/shell.o \

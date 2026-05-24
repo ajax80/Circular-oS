@@ -5,13 +5,8 @@
 #include "shell.h"
 #include "mm.h"
 #include "pci.h"
-#include "idt.h"
-#include "pic.h"
-#include "timer.h"
 #include "audio.h"
-
-/* declared in isr.asm */
-extern void irq0_stub(void);
+#include "timer.h"
 
 /* heap: 2MB just past 1MB mark */
 #define HEAP_START 0x00200000u
@@ -65,13 +60,8 @@ void kernel_main(unsigned int magic, unsigned int mb_info_addr) {
     }
 
     pci_init();
-    idt_init();
-    pic_init();
-    idt_set_gate(0x20, (unsigned int)irq0_stub);
     timer_init();
     audio_init();
-    __asm__ volatile("sti");
-
     schema_boot();
     fb_update_state("SETTLED");
     shell_run();
