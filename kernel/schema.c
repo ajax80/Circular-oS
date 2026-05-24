@@ -73,5 +73,10 @@ void schema_boot(void) {
     serial_puts("[3] runlevel\n");
     serial_puts("[4] env load\n");
     serial_puts("[5] env active\n");
+    /* step 6 (STATE_FRICTION) is intentionally absent from clean boot.
+       FRICTION has three outcomes: a=failed as expected, b=failed without
+       expected end, c=passed without reason. None are valid at power-on.
+       If FRICTION appears on boot, the system was compromised before it started.
+       Clean boot goes directly to SETTLED — friction is never the starting ground. */
     serial_puts("[7] settled\n");
 }
