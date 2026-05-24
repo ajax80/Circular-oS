@@ -53,6 +53,20 @@ uint8_t schema_eval(schema_instance_t *inst, uint32_t flags) {
     return inst->state;
 }
 
+const char *state_name(uint8_t s) {
+    switch (s) {
+        case STATE_FUNDAMENTAL: return "FUNDAMENTAL";
+        case STATE_FRICTION:    return "FRICTION";
+        case STATE_SETTLED:     return "SETTLED";
+        case STATE_NEW_PROCESS: return "NEW_PROCESS";
+        case STATE_RECOVERY:    return "RECOVERY";
+        case STATE_FULL_TRUST:  return "FULL_TRUST";
+        case STATE_PERFECT:     return "PERFECT";
+        case STATE_EXCISED:     return "EXCISED";
+        default:                return "UNKNOWN";
+    }
+}
+
 void schema_boot(void) {
     serial_puts("[1] kernel core alive\n");
     serial_puts("[2] init\n");

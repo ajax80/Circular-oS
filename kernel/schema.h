@@ -69,8 +69,9 @@ typedef struct {
     uint32_t flags;
 } schema_instance_t;
 
-void    schema_init(schema_instance_t *inst, uint32_t pid, uint8_t target);
-uint8_t schema_eval(schema_instance_t *inst, uint32_t flags);
-void    schema_boot(void);
+void        schema_init(schema_instance_t *inst, uint32_t pid, uint8_t target);
+uint8_t     schema_eval(schema_instance_t *inst, uint32_t flags);
+void        schema_boot(void);
+const char *state_name(uint8_t s);
 
 #endif

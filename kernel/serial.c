@@ -31,6 +31,34 @@ void serial_puts(const char *s) {
     while (*s) serial_putc(*s++);
 }
 
+void serial_puth(unsigned int v) {
+    const char *h = "0123456789abcdef";
+    int i;
+    serial_puts("0x");
+    for (i = 28; i >= 0; i -= 4)
+        serial_putc(h[(v >> i) & 0xF]);
+}
+
+char serial_getc(void) {
+    while (!(inb(COM1 + 5) & 0x01));
+    return (char)inb(COM1);
+}
+
+void serial_gets(char *buf, int max) {
+    int i = 0;
+    while (i < max - 1) {
+        char c = serial_getc();
+        if (c == '\r' || c == '\n') { serial_puts("\r\n"); break; }
+        if (c == '\b' || c == 127) {
+            if (i > 0) { i--; serial_puts("\b \b"); }
+            continue;
+        }
+        buf[i++] = c;
+        serial_putc(c);
+    }
+    buf[i] = '\0';
+}
+
 void serial_putu(unsigned int v) {
     char buf[12];
     int i = 0, j;

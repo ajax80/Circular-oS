@@ -10,6 +10,7 @@ LDFLAGS = -m elf_i386 -T linker.ld --oformat elf32-i386
 OBJS = boot/boot.o \
        kernel/serial.o \
        kernel/schema.o \
+       kernel/shell.o \
        kernel/kernel.o
 
 all: circular.elf
