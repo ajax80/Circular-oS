@@ -1,6 +1,13 @@
 #include "shell.h"
 #include "schema.h"
 #include "serial.h"
+#include "fb.h"
+
+#define COL_OUTPUT  0x00CC33
+#define COL_PROMPT  0x00FF88
+#define COL_STATE   0xFFAA00
+#define COL_ERR     0xFF4444
+#define COL_76      0xFF6600
 
 #define MAX_PROCS   16
 #define BUF_LEN     64
@@ -96,7 +103,9 @@ static void cmd_spawn(uint32_t flags) {
 
     if (inst->state == STATE_EXCISED) {
         procs[slot].active = 0;
+        fb_set_fg(COL_76);
         serial_puts("  76: branch excised\n");
+        fb_set_fg(COL_OUTPUT);
     }
 }
 
@@ -193,10 +202,14 @@ static void dispatch(char *line) {
 
 void shell_run(void) {
     char buf[BUF_LEN];
+    fb_set_fg(0xFFFFFF);
     serial_puts("\nCircular OS shell\n");
+    fb_set_fg(COL_OUTPUT);
     serial_puts("type 'help' for commands\n\n");
     while (1) {
+        fb_set_fg(COL_PROMPT);
         serial_puts("circular> ");
+        fb_set_fg(COL_OUTPUT);
         serial_gets(buf, BUF_LEN);
         dispatch(buf);
     }

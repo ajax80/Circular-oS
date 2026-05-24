@@ -8,6 +8,8 @@ ASFLAGS = -f elf32
 LDFLAGS = -m elf_i386 -T linker.ld --oformat elf32-i386
 
 OBJS = boot/boot.o \
+       kernel/vga.o \
+       kernel/fb.o \
        kernel/serial.o \
        kernel/schema.o \
        kernel/shell.o \

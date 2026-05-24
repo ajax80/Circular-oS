@@ -1,4 +1,6 @@
 #include "serial.h"
+#include "vga.h"
+#include "fb.h"
 
 #define COM1 0x3F8
 
@@ -23,6 +25,8 @@ void serial_init(void) {
 }
 
 void serial_putc(char c) {
+    vga_putc(c);
+    fb_putc(c);
     while (!(inb(COM1 + 5) & 0x20));
     outb(COM1, c);
 }
@@ -39,9 +43,21 @@ void serial_puth(unsigned int v) {
         serial_putc(h[(v >> i) & 0xF]);
 }
 
+static const char sc_map[58] = {
+    0,  0,  '1','2','3','4','5','6','7','8','9','0','-','=','\b','\t',
+    'q','w','e','r','t','y','u','i','o','p','[',']','\n', 0,
+    'a','s','d','f','g','h','j','k','l',';','\'','`', 0, '\\',
+    'z','x','c','v','b','n','m',',','.','/', 0,  '*', 0,  ' '
+};
+
 char serial_getc(void) {
-    while (!(inb(COM1 + 5) & 0x01));
-    return (char)inb(COM1);
+    while (1) {
+        if (inb(0x64) & 0x01) {
+            unsigned char sc = inb(0x60);
+            if (!(sc & 0x80) && sc < sizeof(sc_map) && sc_map[sc])
+                return sc_map[sc];
+        }
+    }
 }
 
 void serial_gets(char *buf, int max) {
