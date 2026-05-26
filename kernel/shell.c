@@ -25,6 +25,28 @@ typedef struct {
 static proc_entry_t procs[MAX_PROCS];
 static uint32_t     next_pid = 1;
 
+static unsigned char inb_shell(unsigned short port) {
+    unsigned char v;
+    __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(port));
+    return v;
+}
+
+static int kbd_getc(void) {
+    static const char map[58] = {
+        0,  0, '1','2','3','4','5','6','7','8','9','0','-','=','\b',
+        '\t','q','w','e','r','t','y','u','i','o','p','[',']','\n',
+        0,  'a','s','d','f','g','h','j','k','l',';','\'','`',
+        0,  '\\','z','x','c','v','b','n','m',',','.','/',0,
+        '*', 0, ' '
+    };
+    unsigned char sc;
+    if (!(inb_shell(0x64) & 1)) return 0;
+    sc = inb_shell(0x60);
+    if (sc & 0x80) return 0;        /* key release */
+    if (sc < 58)   return (int)(unsigned char)map[sc];
+    return 0;
+}
+
 static const char *skip_spaces(const char *s) {
     while (*s == ' ') s++;
     return s;
@@ -534,8 +556,85 @@ static void dispatch(char *line) {
     }
 }
 
-static int  fed_online = 0;
-static int  fed_total  = 49;
+static int  fed_online   = 0;
+static int  fed_total    = 49;
+static int  selected_node = -1;
+
+static char *sc_utoa(char *p, uint32_t n) {
+    char tmp[12], *t = tmp;
+    if (!n) { *t++ = '0'; }
+    else { while (n) { *t++ = '0' + n % 10; n /= 10; } }
+    while (t > tmp) *p++ = *--t;
+    return p;
+}
+
+static char *sc_utox(char *p, uint32_t n) {
+    const char *h = "0123456789ABCDEF";
+    int i;
+    *p++ = '0'; *p++ = 'x';
+    for (i = 28; i >= 0; i -= 4) *p++ = h[(n >> i) & 0xF];
+    return p;
+}
+
+static void show_node_detail(int idx) {
+    char l1[40], l2[40], *p;
+    const char *s;
+    unsigned int col;
+
+    if (idx < 0 || idx >= MAX_PROCS) {
+        fb_draw_node_detail("", "", 0);
+        return;
+    }
+
+    /* line 1: "NODE 05  FUNDAMENTAL" */
+    p = l1;
+    *p++ = 'N'; *p++ = 'O'; *p++ = 'D'; *p++ = 'E'; *p++ = ' ';
+    if (idx + 1 < 10) *p++ = '0';
+    p = sc_utoa(p, (uint32_t)(idx + 1));
+    *p++ = ' '; *p++ = ' ';
+    if (procs[idx].active) {
+        s = state_name(procs[idx].inst.state);
+        while (*s) *p++ = *s++;
+    } else {
+        *p++ = 'E'; *p++ = 'M'; *p++ = 'P'; *p++ = 'T'; *p++ = 'Y';
+    }
+    *p = 0;
+
+    /* line 2: "PID:3  WT:8  FL:0x000000FF" */
+    p = l2;
+    if (procs[idx].active) {
+        *p++ = 'P'; *p++ = 'I'; *p++ = 'D'; *p++ = ':';
+        p = sc_utoa(p, procs[idx].inst.pid);
+        *p++ = ' '; *p++ = ' ';
+        *p++ = 'W'; *p++ = 'T'; *p++ = ':';
+        p = sc_utoa(p, procs[idx].inst.weight);
+        *p++ = ' '; *p++ = ' ';
+        *p++ = 'F'; *p++ = 'L'; *p++ = ':';
+        p = sc_utox(p, procs[idx].inst.flags);
+    }
+    *p = 0;
+
+    col = procs[idx].active ? state_color(procs[idx].inst.state) : 0x444444;
+    fb_draw_node_detail(l1, l2, col);
+}
+
+static void refresh_grid(void) {
+    unsigned int colors[49];
+    char glyphs[49];
+    int i;
+    if (!fb_active()) return;
+    for (i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].active) {
+            colors[i] = state_color(procs[i].inst.state);
+            glyphs[i] = state_glyph(procs[i].inst.state);
+        } else {
+            colors[i] = 0;
+            glyphs[i] = '-';
+        }
+    }
+    fb_draw_node_grid(colors, glyphs, 49, selected_node);
+    show_node_detail(selected_node);
+}
 
 static int count_online(void) {
     int i, n = 0;
@@ -549,6 +648,7 @@ void shell_run(void) {
     int  pos = 0;
     int  cur_x, cur_y, last_x = -1, last_y = -1;
     int  first = 1;
+    uint8_t prev_buttons = 0;
 
     /* init mouse to screen centre */
     if (fb_active()) {
@@ -572,6 +672,17 @@ void shell_run(void) {
         mouse_poll();
         cur_x = mouse_x;
         cur_y = mouse_y;
+
+        /* left click release = select node */
+        if ((prev_buttons & 1) && !(mouse_buttons & 1) && fb_active()) {
+            int hit = fb_node_hit_test(cur_x, cur_y);
+            if (hit >= 0) {
+                selected_node = (hit == selected_node) ? -1 : hit;
+                refresh_grid();
+            }
+        }
+        prev_buttons = mouse_buttons;
+
         if (fb_active() && (cur_x != last_x || cur_y != last_y)) {
             fb_erase_cursor();
             fb_draw_cursor(cur_x, cur_y);
@@ -583,12 +694,14 @@ void shell_run(void) {
         if (first && fb_active()) {
             fed_online = count_online();
             fb_draw_taskbar("SETTLED", fed_online, fed_total, cur_x, cur_y);
+            refresh_grid();
             first = 0;
         }
 
-        /* keyboard (non-blocking) */
+        /* keyboard (non-blocking) — serial first, PS/2 fallback */
         int c = serial_trygetc();
-        if (!c) continue;
+        if (c <= 0) c = kbd_getc();
+        if (c <= 0) continue;
 
         if (c == '\n' || c == '\r') {
             buf[pos] = 0;
@@ -599,6 +712,7 @@ void shell_run(void) {
             if (fb_active()) {
                 fed_online = count_online();
                 fb_draw_taskbar("SETTLED", fed_online, fed_total, cur_x, cur_y);
+                refresh_grid();
             }
             fb_set_fg(COL_PROMPT);
             serial_puts("circular> ");
