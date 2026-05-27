@@ -37,12 +37,16 @@
 #define COL_ERR     0xFF4444
 #define COL_76      0xFF6600
 
-#define MAX_PROCS   49
-#define BUF_LEN     64
+#define MAX_PROCS    49
+#define BUF_LEN      64
+#define MAX_RESTARTS  3
 
 typedef struct {
     schema_instance_t inst;
-    uint8_t active;
+    uint8_t  active;
+    uint8_t  restartable;
+    uint8_t  restart_count;
+    uint32_t initial_flags;
 } proc_entry_t;
 
 static proc_entry_t procs[MAX_PROCS];
@@ -120,7 +124,39 @@ static void arc_step(schema_instance_t *inst, uint32_t flags, uint8_t max, uint8
     serial_putc('\n');
 }
 
-static void cmd_spawn(uint32_t flags) {
+static void do_restart(int slot) {
+    proc_entry_t *p = &procs[slot];
+    int iters;
+    while (p->restart_count < MAX_RESTARTS) {
+        p->restart_count++;
+        serial_puts("  G03: restart ");
+        serial_putu(p->restart_count);
+        serial_putc('/');
+        serial_putu(MAX_RESTARTS);
+        serial_puts(" pid=");
+        serial_putu(p->inst.pid);
+        serial_putc('\n');
+        schema_init(&p->inst, p->inst.pid, STATE_PERFECT);
+        p->active = 1;
+        iters = 0;
+        while (iters++ < 8) {
+            uint8_t cur = p->inst.state;
+            if (cur == STATE_NEW_PROCESS || cur == STATE_FULL_TRUST ||
+                cur == STATE_RECOVERY    || cur == STATE_FRICTION)
+                schema_eval(&p->inst, p->initial_flags);
+            else break;
+        }
+        if (p->inst.state != STATE_EXCISED) return;
+    }
+    fb_set_fg(COL_76);
+    serial_puts("  76: pid=");
+    serial_putu(p->inst.pid);
+    serial_puts(" max restarts exhausted\n");
+    fb_set_fg(COL_OUTPUT);
+    p->active = 0;
+}
+
+static void cmd_spawn(uint32_t flags, uint8_t restartable) {
     int slot = -1, i;
     for (i = 0; i < MAX_PROCS; i++) {
         if (!procs[i].active) { slot = i; break; }
@@ -129,12 +165,16 @@ static void cmd_spawn(uint32_t flags) {
 
     schema_instance_t *inst = &procs[slot].inst;
     schema_init(inst, next_pid++, STATE_PERFECT);
-    procs[slot].active = 1;
+    procs[slot].active        = 1;
+    procs[slot].restartable   = restartable;
+    procs[slot].initial_flags = flags;
+    procs[slot].restart_count = 0;
 
     serial_puts("spawned pid=");
     serial_putu(inst->pid);
     serial_puts(" flags=");
     serial_puth(flags);
+    if (restartable) serial_puts(" [restartable]");
     serial_putc('\n');
 
     int iters = 0;
@@ -152,10 +192,11 @@ static void cmd_spawn(uint32_t flags) {
     }
 
     if (inst->state == STATE_EXCISED) {
-        procs[slot].active = 0;
         fb_set_fg(COL_76);
         serial_puts("  76: branch excised\n");
         fb_set_fg(COL_OUTPUT);
+        procs[slot].active = 0;
+        if (restartable) do_restart(slot);
     }
 }
 
@@ -171,7 +212,10 @@ static void cmd_eval(uint32_t pid, uint32_t flags) {
             serial_putc('\n');
             schema_eval(inst, flags);
             print_inst(inst);
-            if (inst->state == STATE_EXCISED) procs[i].active = 0;
+            if (inst->state == STATE_EXCISED) {
+                procs[i].active = 0;
+                if (procs[i].restartable) do_restart(i);
+            }
             return;
         }
     }
@@ -199,6 +243,26 @@ static void cmd_kill(uint32_t pid) {
             serial_puts("76: pid=");
             serial_putu(pid);
             serial_puts(" excised\n");
+            return;
+        }
+    }
+    serial_puts("pid not found\n");
+}
+
+static void cmd_restart(uint32_t pid) {
+    int i;
+    for (i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].inst.pid == pid) {
+            if (procs[i].active) { serial_puts("pid still active\n"); return; }
+            procs[i].restart_count = 0;
+            do_restart(i);
+            if (procs[i].active) {
+                serial_puts("  restarted pid=");
+                serial_putu(pid);
+                serial_puts(" -> ");
+                serial_puts(state_name(procs[i].inst.state));
+                serial_putc('\n');
+            }
             return;
         }
     }
@@ -508,9 +572,11 @@ static void cmd_schema_audio(uint32_t pid) {
 static void cmd_help(void) {
     serial_puts("commands:\n");
     serial_puts("  spawn <hex>       spawn process with condition flags\n");
+    serial_puts("  rspawn <hex>      spawn restartable process (G03 on excision)\n");
     serial_puts("  eval <pid> <hex>  push flags to existing process\n");
     serial_puts("  ps                list active processes\n");
     serial_puts("  kill <pid>        excise a process (76)\n");
+    serial_puts("  restart <pid>     manually restart an excised process\n");
     serial_puts("  reset             clear all processes\n");
     serial_puts("  bootleg           boot all 49 federation nodes\n");
     serial_puts("  status            live federation map\n");
@@ -536,7 +602,11 @@ static void dispatch(char *line) {
     if (!*p) return;
 
     if (p[0]=='s' && p[1]=='p' && p[2]=='a' && p[3]=='w' && p[4]=='n') {
-        cmd_spawn(parse_hex(p + 5));
+        cmd_spawn(parse_hex(p + 5), 0);
+    } else if (p[0]=='r' && p[1]=='s') {
+        cmd_spawn(parse_hex(p + 6), 1);
+    } else if (p[0]=='r' && p[1]=='e' && p[2]=='s' && p[3]=='t' && p[4]=='a') {
+        cmd_restart(parse_uint(p + 8));
     } else if (p[0]=='e' && p[1]=='v' && p[2]=='a' && p[3]=='l') {
         p = skip_spaces(p + 4);
         uint32_t pid = parse_uint(p);
