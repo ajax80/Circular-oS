@@ -1,0 +1,58 @@
+COMMERCIAL LICENSE — Circular OS
+Copyright (C) 2026 Jonathan Eugene Ayers. All rights reserved.
+
+────────────────────────────────────────────────────────────────
+
+OPEN SOURCE USE
+
+Circular OS is free software released under the GNU Affero General
+Public License, version 3 (AGPL-3.0), the full text of which is
+contained in the LICENSE file in this repository.
+
+You may use, copy, modify, and distribute Circular OS under the
+terms of the AGPL-3.0 at no charge, provided that all copies and
+derivative works are also licensed under the AGPL-3.0 and that the
+source code remains publicly available.
+
+────────────────────────────────────────────────────────────────
+
+COMMERCIAL USE
+
+If you wish to:
+
+  - Embed Circular OS in a proprietary or closed-source product
+  - Distribute Circular OS without fulfilling the AGPL-3.0
+    source disclosure requirements
+  - Use Circular OS in a hardware device sold commercially
+  - Use Circular OS in a SaaS or hosted product without releasing
+    your full application stack under AGPL-3.0
+
+...then you require a separate commercial license.
+
+Commercial licenses are available and negotiated on a per-use basis.
+
+To inquire, contact:
+
+  Jonathan Eugene Ayers
+  ayersjon80@gmail.com
+
+────────────────────────────────────────────────────────────────
+
+NO IMPLICIT GRANT
+
+Nothing in this file grants any rights beyond what is explicitly
+stated. Use of Circular OS without a valid license — either
+AGPL-3.0 or a separately executed commercial license agreement —
+is copyright infringement.
+
+────────────────────────────────────────────────────────────────
+
+PATENT NOTICE
+
+The weight-governed arc-state process supervision model implemented
+in Circular OS, including its threshold accumulation mechanism and
+anti-deadlock arc architecture, may be subject to patent protection.
+Commercial use of this system or method without an executed license
+agreement is prohibited.
+
+────────────────────────────────────────────────────────────────
